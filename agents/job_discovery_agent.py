@@ -2,7 +2,8 @@
 Job Discovery Agent for AI Job Hunter Agent.
 
 Searches jobs based on role and experience using Playwright to simulate
-job search across multiple portals. Scrapes title, company, description, and URL.
+job search across multiple portals. Runs scrapers sequentially to avoid
+Playwright event-loop conflicts (e.g. under Streamlit).
 """
 
 import logging
@@ -90,9 +91,11 @@ def discover_jobs(
         _format_experience(experience_years) if experience_years is not None else None
     )
 
+    # Run portal scrapers sequentially (Playwright + Streamlit conflict in threads)
     for portal in portals:
+        p = portal.lower()
         try:
-            if portal.lower() == "linkedin":
+            if p == "linkedin":
                 jobs = scrape_linkedin_jobs(
                     search_query=target_role,
                     location=location,
@@ -100,7 +103,7 @@ def discover_jobs(
                     max_results=max_per_portal,
                     fetch_descriptions=fetch_descriptions,
                 )
-            elif portal.lower() == "naukri":
+            elif p == "naukri":
                 jobs = scrape_naukri_jobs(
                     search_query=target_role,
                     location=location,
@@ -108,7 +111,7 @@ def discover_jobs(
                     max_results=max_per_portal,
                     fetch_descriptions=fetch_descriptions,
                 )
-            elif portal.lower() == "indeed":
+            elif p == "indeed":
                 jobs = scrape_indeed_jobs(
                     search_query=target_role,
                     location=location,
@@ -118,20 +121,18 @@ def discover_jobs(
             else:
                 logger.warning("Unknown portal: %s", portal)
                 continue
-
             for job in jobs:
                 url = job.get("url", "") or ""
                 dedup_key = url or f"{job.get('title','')}|{job.get('company','')}"
                 if dedup_key and dedup_key not in seen_urls:
                     seen_urls.add(dedup_key)
                     all_jobs.append(_normalize_job_output(job))
-
         except Exception as e:
             logger.exception("Discovery failed for portal %s: %s", portal, e)
 
-    # Use demo jobs when scrapers return 0 (for testing)
-    if not all_jobs and getattr(settings, "use_demo_jobs_on_empty", True):
-        logger.info("Using demo jobs for testing (scrapers returned 0)")
+    # Use demo jobs only when explicitly enabled (e.g. USE_DEMO_JOBS_ON_EMPTY=true in .env)
+    if not all_jobs and getattr(settings, "use_demo_jobs_on_empty", False):
+        logger.info("Using demo jobs (use_demo_jobs_on_empty=True)")
         for job in DEMO_JOBS:
             all_jobs.append(_normalize_job_output(job))
 

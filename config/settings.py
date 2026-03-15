@@ -47,8 +47,8 @@ class Settings(BaseSettings):
     application_headless: bool = False
     browser_timeout_ms: int = 30000
 
-    # Demo mode: use mock jobs when scrapers return 0 (set False for live-only)
-    use_demo_jobs_on_empty: bool = True
+    # Demo mode: use mock jobs when scrapers return 0 (set True in .env only for testing)
+    use_demo_jobs_on_empty: bool = False
 
     # API
     api_host: str = "0.0.0.0"

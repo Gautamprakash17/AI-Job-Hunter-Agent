@@ -25,6 +25,9 @@ class JobAgentState(TypedDict):
     target_role: str
     location: Optional[str]
     experience_years: Optional[float]
+    # Optional discovery: which portals and how many jobs per portal
+    portals: Optional[List[str]]
+    max_per_portal: Optional[int]
 
     # Agent outputs
     resume_profile: Dict[str, Any]
@@ -69,16 +72,17 @@ def _discover_jobs_node(state: JobAgentState) -> JobAgentState:
     if isinstance(target, list):
         target = target[0] if target else ""
 
-    # Use only explicit experience from UI/API; do not fall back to resume profile.
-    # When experience_years is None, discovery returns all jobs (no experience filter).
     exp_years: Optional[float] = state.get("experience_years")
+    portals: Optional[List[str]] = state.get("portals")
+    max_per_portal: int = state.get("max_per_portal") or 15
 
     try:
         jobs = discover_jobs(
             target_role=target or "Software Engineer",
             location=state.get("location"),
             experience_years=exp_years,
-            max_per_portal=15,
+            portals=portals,
+            max_per_portal=max_per_portal,
             fetch_descriptions=False,  # Faster; ranking uses title+company+short desc
         )
         return {**state, "jobs_found": jobs}
@@ -182,10 +186,11 @@ def run_job_hunter_workflow(
     target_role: str,
     location: Optional[str] = None,
     experience_years: Optional[float] = None,
+    portals: Optional[List[str]] = None,
+    max_per_portal: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
-    Backwards-compatible wrapper around run_job_agent.
-    Location and experience_years are currently hints; core flow uses resume profile.
+    Run discovery + ranking workflow. Optional: location, experience_years, portals, max_per_portal.
     """
     graph = get_job_agent_graph()
     initial_state: JobAgentState = {
@@ -193,6 +198,8 @@ def run_job_hunter_workflow(
         "target_role": target_role,
         "location": location,
         "experience_years": experience_years,
+        "portals": portals,
+        "max_per_portal": max_per_portal,
         "resume_profile": {},
         "jobs_found": [],
         "ranked_jobs": [],

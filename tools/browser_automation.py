@@ -7,7 +7,7 @@ and application submission.
 
 import logging
 from contextlib import contextmanager
-from typing import Any, Generator, Optional
+from typing import Any, Generator, List, Optional
 
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
@@ -15,23 +15,53 @@ from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
+# Args that reduce "automation" detection (sites like Naukri may block headless otherwise)
+STEALTH_LAUNCH_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-infobars",
+    "--window-size=1920,1080",
+]
+
 
 @contextmanager
 def get_browser(
     headless: Optional[bool] = None,
+    launch_timeout_ms: Optional[int] = None,
+    channel: Optional[str] = None,
+    args: Optional[List[str]] = None,
 ) -> Generator[Browser, None, None]:
     """
     Context manager for Playwright browser instance.
 
     Args:
         headless: Run browser headless. Uses settings if None.
+        launch_timeout_ms: Max ms to wait for browser launch. Uses settings.browser_timeout_ms if None.
+        channel: Browser channel, e.g. "chrome" to use installed Chrome.
+        args: Extra launch args (e.g. STEALTH_LAUNCH_ARGS to reduce bot detection).
 
     Yields:
         Playwright Browser instance.
     """
     headless = headless if headless is not None else settings.headless
+    timeout = launch_timeout_ms if launch_timeout_ms is not None else settings.browser_timeout_ms
+    launch_kw: dict = {"headless": headless, "timeout": timeout}
+    if args:
+        launch_kw["args"] = args
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
+        try:
+            if channel:
+                browser = p.chromium.launch(**{**launch_kw, "channel": channel})
+            else:
+                browser = p.chromium.launch(**launch_kw)
+        except Exception as e:
+            if channel:
+                logger.debug("Launch with channel=%s failed (%s), retrying with Chromium", channel, e)
+                launch_kw.pop("channel", None)
+                browser = p.chromium.launch(**launch_kw)
+            else:
+                raise
         try:
             yield browser
         finally:

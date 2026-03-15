@@ -4,68 +4,71 @@ Naukri.com job scraper for AI Job Hunter Agent.
 Uses Playwright to handle dynamic content. Tries multiple selectors
 for job cards (Naukri changes structure often). Waits for content
 then extracts title, company, location, and job URL.
+Total run is capped at ~65s so the UI does not hang.
 """
 
 import logging
 import re
+import time
 from typing import List, Optional
 
-from tools.browser_automation import get_browser, get_browser_context
+from tools.browser_automation import get_browser, get_browser_context, STEALTH_LAUNCH_ARGS
 
 logger = logging.getLogger(__name__)
 
-# Naukri uses nI-gNb-* classes in newer UI (e.g. nI-gNb-sb__placeholder for search). Try new first, then legacy.
+# Live SRP structure (March 2026): job list in #listContainer, each job in .srp-jobtuple-wrapper
 JOB_CARD_SELECTORS = [
-    "[class*='nI-gNb'][class*='job']",
-    "li[class*='nI-gNb']",
-    "div[class*='nI-gNb-job']",
-    "article[class*='nI-gNb']",
     ".srp-jobtuple-wrapper",
+    "div.srp-jobtuple-wrapper",
+    "#listContainer .srp-jobtuple-wrapper",
+    "div.cust-job-tuple.sjw__tuple",
+    "div[data-job-id]",
+    "[class*='jobtuple']",
     "div.jobTuple",
     ".jobTuple.bgWhite",
     "article.jobTuple",
-    "[class*='jobtuple']",
-    "div[class*='jobTuple']",
-    "article[class*='job']",
-    ".list",
-    "article",
 ]
 
-# Wait for new UI to be present (search placeholder: nI-gNb-sb__placeholder)
+# Wait for list or a job card to be present
 PAGE_READY_SELECTORS = [
+    ".srp-jobtuple-wrapper",
+    "#listContainer",
+    "div.styles_job-listing-container__OCfZC",
     "span.nI-gNb-sb__placeholder",
     "[class*='nI-gNb-sb']",
-    "[class*='nI-gNb']",
-    ".srp-jobtuple-wrapper",
 ]
 
+# Title: h2 > a.title with href like job-listings-...-090326500780
 TITLE_SELECTORS = [
-    "a[href*='job-details']",
     "a.title",
+    "h2 a.title",
+    "a[href*='job-listings']",
+    "a[href*='job-details']",
     "a[class*='title']",
-    "a[class*='nI-gNb']",
     ".jobTitle",
 ]
 COMPANY_SELECTORS = [
     "a.comp-name",
+    ".comp-dtls-wrap a.comp-name",
     "a[class*='comp-name']",
-    "[class*='nI-gNb'][class*='company']",
     ".companyName",
-    "[class*='company']",
 ]
 LOCATION_SELECTORS = [
     "span.locWdth",
+    "span.loc .locWdth",
+    ".loc span.locWdth",
+    ".job-details .loc",
     "span.loc-wrap",
-    "[class*='nI-gNb'][class*='loc']",
     ".location",
-    "span[class*='loc']",
-    ".loc",
 ]
 
-# Wait for dynamic content and reduce bot detection
-INITIAL_WAIT_MS = 4000
-SELECTOR_TIMEOUT_MS = 25000
-NAV_TIMEOUT_MS = 45000
+# Balance: enough wait for Naukri JS to render, but cap total run
+INITIAL_WAIT_MS = 5000   # Naukri is React/Next; list renders after ~3–4s
+SELECTOR_TIMEOUT_MS = 10000
+NAV_TIMEOUT_MS = 18000
+PAGE_READY_TIMEOUT_MS = 8000   # single wait for list or link
+SCRAPE_TOTAL_TIMEOUT_MS = 55000  # 55s cap
+MAX_CARD_SELECTOR_TRIES = 5
 
 
 def _normalize_url(url: Optional[str]) -> str:
@@ -130,8 +133,18 @@ def scrape_naukri_jobs(
         loc_slug = location.replace(" ", "-").lower()
         search_url += f"-in-{loc_slug}"
 
-    # Non-headless helps with Naukri (fewer bot blocks) and debugging
-    with get_browser(headless=False) as browser:
+    def _elapsed_ms():
+        return (time.time() - start_time) * 1000
+
+    start_time = time.time()
+
+    # Stealth args reduce "Access Denied"; prefer system Chrome when available
+    with get_browser(
+        headless=True,
+        launch_timeout_ms=15000,
+        args=STEALTH_LAUNCH_ARGS,
+        channel="chrome",
+    ) as browser:
         with get_browser_context(browser) as context:
             page = context.new_page()
             page.set_default_timeout(SELECTOR_TIMEOUT_MS)
@@ -143,15 +156,17 @@ def scrape_naukri_jobs(
 
             urls_to_try = [search_url]
             if location:
-                # Fallback: try without location in case location breaks the page
                 urls_to_try.append(f"https://www.naukri.com/{slug}-jobs")
 
             cards = []
             for try_url in urls_to_try:
+                if _elapsed_ms() > SCRAPE_TOTAL_TIMEOUT_MS:
+                    logger.warning("Naukri: total timeout reached, stopping.")
+                    break
                 try:
                     page.goto(
                         try_url,
-                        wait_until="domcontentloaded",
+                        wait_until="load",
                         timeout=NAV_TIMEOUT_MS,
                     )
                 except Exception as e:
@@ -160,63 +175,87 @@ def scrape_naukri_jobs(
 
                 page.wait_for_timeout(INITIAL_WAIT_MS)
 
-                # Wait for page to be ready (new UI: nI-gNb-sb__placeholder or legacy)
-                for ready_sel in PAGE_READY_SELECTORS:
+                if _elapsed_ms() > SCRAPE_TOTAL_TIMEOUT_MS:
+                    break
+
+                # Wait for job list or at least one job link (Naukri renders via JS)
+                page_ready = False
+                for ready_sel in PAGE_READY_SELECTORS[:2]:
                     try:
-                        page.wait_for_selector(ready_sel, timeout=6000)
-                        logger.debug("Naukri page ready: %s", ready_sel)
+                        page.wait_for_selector(ready_sel, timeout=PAGE_READY_TIMEOUT_MS)
+                        page_ready = True
+                        break
+                    except Exception:
+                        continue
+                if not page_ready:
+                    try:
+                        page.wait_for_selector('a[href*="job-listings"]', timeout=4000)
+                        page_ready = True
+                    except Exception:
+                        pass
+
+                # Dismiss cookie/overlay so selectors are visible
+                for btn in ["#block", ".qc-cmp2-summary-buttons button", ".bClose", "button:has-text('OK')", "button:has-text('Accept')"]:
+                    try:
+                        page.click(btn, timeout=1500)
+                        page.wait_for_timeout(300)
                         break
                     except Exception:
                         pass
 
-                # Dismiss cookie/overlay if present
-                for btn in ["#block", ".qc-cmp2-summary-buttons button", "[data-cy='cookie-consent-accept']", ".bClose", "button:has-text('OK')", "button:has-text('Accept')"]:
-                    try:
-                        page.click(btn, timeout=2000)
-                        page.wait_for_timeout(500)
-                        break
-                    except Exception:
-                        pass
+                if _elapsed_ms() > SCRAPE_TOTAL_TIMEOUT_MS:
+                    break
 
-                for card_sel in JOB_CARD_SELECTORS:
+                # Try card selectors (no skip if page_ready was False – still try)
+                for i, card_sel in enumerate(JOB_CARD_SELECTORS):
+                    if i >= MAX_CARD_SELECTOR_TRIES or _elapsed_ms() > SCRAPE_TOTAL_TIMEOUT_MS:
+                        break
                     try:
-                        page.wait_for_selector(card_sel, timeout=8000)
+                        page.wait_for_selector(card_sel, timeout=5000)
                         cards = page.query_selector_all(card_sel)
                         if len(cards) >= 1:
-                            logger.info("Naukri: using '%s' (%d cards) from %s", card_sel, len(cards), try_url)
+                            logger.info("Naukri: using '%s' (%d cards)", card_sel, len(cards))
                             break
                     except Exception:
                         continue
                 if cards:
                     break
 
-            # Fallback: find job links; use each link as card (title + url from link, company/location may be empty)
-            if not cards:
+            # Fallback: find job links
+            if not cards and _elapsed_ms() <= SCRAPE_TOTAL_TIMEOUT_MS:
                 try:
-                    job_links = page.query_selector_all('a[href*="job-details"]')
+                    job_links = page.query_selector_all('a[href*="job-listings"], a[href*="job-details"]')
                     cards = []
                     seen = set()
                     for link in job_links:
                         href = (link.get_attribute("href") or "").strip()
-                        if not href or "job-details" not in href or href in seen:
+                        if not href or href in seen or ("job-listings" not in href and "job-details" not in href):
                             continue
                         seen.add(href)
                         cards.append(link)
                     if cards:
-                        logger.info("Naukri: using job-details links as cards (%d)", len(cards))
+                        logger.info("Naukri: using job links as cards (%d)", len(cards))
                 except Exception as e:
-                    logger.debug("Naukri job-details fallback failed: %s", e)
+                    logger.debug("Naukri job-links fallback failed: %s", e)
 
             if not cards:
-                logger.warning("Naukri: no job cards found with any selector. Page may have changed or be blocking.")
+                try:
+                    final_url = page.url
+                    title = page.title()
+                    logger.warning(
+                        "Naukri: no job cards found. final_url=%s page_title=%s",
+                        final_url[:80] if final_url else "",
+                        title[:60] if title else "",
+                    )
+                except Exception:
+                    pass
                 page.close()
                 return jobs
 
             seen_urls: set = set()
             collected = 0
-
             for card in cards:
-                if collected >= max_results:
+                if collected >= max_results or _elapsed_ms() > SCRAPE_TOTAL_TIMEOUT_MS:
                     break
                 try:
                     job = _extract_job_from_card(card)
@@ -237,18 +276,19 @@ def scrape_naukri_jobs(
 
             page.close()
 
-    logger.info("Scraped %d jobs from Naukri", len(jobs))
+    logger.info("Scraped %d jobs from Naukri in %.1fs", len(jobs), _elapsed_ms() / 1000)
     return jobs
 
 
 def _extract_job_from_card(card) -> Optional[dict]:
     """Extract title, company, location, url from one job card using multiple fallbacks."""
     try:
+        root = card
         title = ""
         job_url = ""
 
         for sel in TITLE_SELECTORS:
-            el = card.query_selector(sel)
+            el = root.query_selector(sel)
             if el:
                 title = _extract_text(el)
                 job_url = el.get_attribute("href") or ""
@@ -256,8 +296,8 @@ def _extract_job_from_card(card) -> Optional[dict]:
                     break
         job_url = _normalize_url(job_url)
 
-        company = _first_text_from_selectors(card, COMPANY_SELECTORS)
-        location = _first_text_from_selectors(card, LOCATION_SELECTORS)
+        company = _first_text_from_selectors(root, COMPANY_SELECTORS)
+        location = _first_text_from_selectors(root, LOCATION_SELECTORS)
 
         if not title and job_url:
             title = "Job"
@@ -276,8 +316,12 @@ def _extract_job_from_card(card) -> Optional[dict]:
 
 
 def _extract_naukri_job_id(url: str) -> Optional[str]:
-    """Extract job ID from Naukri URL."""
+    """Extract job ID from Naukri URL (job-listings-...-ID or job-details/ID)."""
     if not url:
         return None
+    # job-listings-...-090326500780
+    match = re.search(r"-(\d{8,})$", url.split("?")[0])
+    if match:
+        return match.group(1)
     match = re.search(r"job-details/([^/?]+)", url) or re.search(r"nj[=_](\w+)", url)
     return match.group(1) if match else None

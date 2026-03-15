@@ -80,6 +80,33 @@ def main() -> None:
                 experience_years = None
         location = st.text_input("Location (optional)", placeholder="Remote, India")
 
+        st.header("Discovery options (optional)")
+        with st.expander("Portals & limits", expanded=False):
+            st.caption("Choose which job portals to use and how many jobs per portal.")
+            col1, col2 = st.columns(2)
+            with col1:
+                use_linkedin = st.checkbox("LinkedIn", value=True, key="portal_linkedin")
+                use_indeed = st.checkbox("Indeed", value=True, key="portal_indeed")
+                use_naukri = st.checkbox("Naukri", value=True, key="portal_naukri")
+            with col2:
+                max_per_portal = st.number_input(
+                    "Max jobs per portal",
+                    min_value=5,
+                    max_value=50,
+                    value=15,
+                    step=5,
+                    key="max_per_portal",
+                )
+        portals = []
+        if use_linkedin:
+            portals.append("linkedin")
+        if use_indeed:
+            portals.append("indeed")
+        if use_naukri:
+            portals.append("naukri")
+        if not portals:
+            portals = ["linkedin", "indeed", "naukri"]  # fallback
+
     # Main area: Discover & Rank
     if st.button("🚀 Discover & Rank Jobs", type="primary"):
         if not resume_path:
@@ -89,12 +116,23 @@ def main() -> None:
         else:
             with st.spinner("Discovering and ranking jobs..."):
                 try:
-                    result = run_job_hunter_workflow(
-                        resume_path=resume_path,
-                        target_role=target_role,
-                        location=location or None,
-                        experience_years=experience_years,
-                    )
+                    # Support both old and new workflow signature (portals, max_per_portal)
+                    try:
+                        result = run_job_hunter_workflow(
+                            resume_path=resume_path,
+                            target_role=target_role,
+                            location=location or None,
+                            experience_years=experience_years,
+                            portals=portals if portals else None,
+                            max_per_portal=max_per_portal,
+                        )
+                    except TypeError:
+                        result = run_job_hunter_workflow(
+                            resume_path=resume_path,
+                            target_role=target_role,
+                            location=location or None,
+                            experience_years=experience_years,
+                        )
                     st.session_state.workflow_result = result
                 except Exception as e:
                     logger.exception("Dashboard workflow failed: %s", e)

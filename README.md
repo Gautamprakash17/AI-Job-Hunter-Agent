@@ -65,7 +65,7 @@ python main.py dashboard
 python main.py workflow --resume data/uploads/resume.pdf --role "AI Engineer" --location "India"
 ```
 
-**Optional:** Set `USE_DEMO_JOBS_ON_EMPTY=false` in `.env` to disable demo fallback when scrapers return 0 jobs.
+**Optional:** Set `USE_DEMO_JOBS_ON_EMPTY=true` in `.env` to show 3 demo jobs when scrapers return 0 (for testing). Default is false (live-only; no demo).
 
 ## API Endpoints
 
