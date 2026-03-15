@@ -2,6 +2,10 @@
 
 **Job search made smart.** A production-style system that automatically **discovers**, **ranks**, and surfaces relevant jobs from LinkedIn, Indeed, and Naukri using semantic similarity with your resume. Job hunter • job search • job finder • LinkedIn jobs • Indeed jobs • Naukri jobs.
 
+## Workflow
+
+![AI Job Hunter Agent Workflow](docs/workflow.png)
+
 ## Features
 
 - **Resume parsing** — Extract structured data from PDF/TXT resumes via LLM
