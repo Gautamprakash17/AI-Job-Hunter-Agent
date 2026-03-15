@@ -1,6 +1,6 @@
 # AI Job Hunter Agent
 
-A production-style system that automatically discovers, ranks, and helps apply to relevant jobs using semantic similarity with your resume.
+**Job search made smart.** A production-style system that automatically **discovers**, **ranks**, and surfaces relevant jobs from LinkedIn, Indeed, and Naukri using semantic similarity with your resume. Job hunter • job search • job finder • LinkedIn jobs • Indeed jobs • Naukri jobs.
 
 ## Features
 
@@ -70,4 +70,7 @@ python main.py workflow --resume data/uploads/resume.pdf --role "AI Engineer" --
 - `POST /api/run-workflow` — Run full workflow
 - `GET /api/applications` — List applications
 - `GET /api/jobs` — List discovered jobs
-# AI-Job-Hunter-Agent
+
+---
+
+*Keywords: job hunter, job search, job finder, job discovery, LinkedIn jobs, Indeed jobs, Naukri jobs, AI job search, resume ranking, job scraper, job aggregator, LangGraph, Streamlit.*
