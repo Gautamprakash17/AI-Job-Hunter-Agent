@@ -10,9 +10,11 @@ Total run is capped at ~65s so the UI does not hang.
 import logging
 import re
 import time
+from datetime import datetime
 from typing import List, Optional
 
 from tools.browser_automation import get_browser, get_browser_context, STEALTH_LAUNCH_ARGS
+from utils.job_posted_date import PostedDateFilter, freeze_posted_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,13 @@ LOCATION_SELECTORS = [
     ".job-details .loc",
     "span.loc-wrap",
     ".location",
+]
+DATE_SELECTORS = [
+    "span.job-post-day",
+    "span[type='latest']",
+    ".job-post-day",
+    "[class*='posted']",
+    "[class*='daysAgo']",
 ]
 
 # Balance: enough wait for Naukri JS to render, but cap total run
@@ -119,6 +128,8 @@ def scrape_naukri_jobs(
     experience: Optional[str] = None,
     max_results: int = 25,
     fetch_descriptions: bool = True,
+    posted_date_filter: PostedDateFilter = "any_time",
+    scrape_reference_time_utc: Optional[datetime] = None,
 ) -> List[dict]:
     """
     Scrape job listings from Naukri.com using Playwright.
@@ -258,7 +269,7 @@ def scrape_naukri_jobs(
                 if collected >= max_results or _elapsed_ms() > SCRAPE_TOTAL_TIMEOUT_MS:
                     break
                 try:
-                    job = _extract_job_from_card(card)
+                    job = _extract_job_from_card(card, scrape_reference_time_utc)
                     if not job or not job.get("title"):
                         continue
                     url = job.get("url") or ""
@@ -280,7 +291,10 @@ def scrape_naukri_jobs(
     return jobs
 
 
-def _extract_job_from_card(card) -> Optional[dict]:
+def _extract_job_from_card(
+    card,
+    scrape_reference_time_utc: Optional[datetime] = None,
+) -> Optional[dict]:
     """Extract title, company, location, url from one job card using multiple fallbacks."""
     try:
         root = card
@@ -298,19 +312,28 @@ def _extract_job_from_card(card) -> Optional[dict]:
 
         company = _first_text_from_selectors(root, COMPANY_SELECTORS)
         location = _first_text_from_selectors(root, LOCATION_SELECTORS)
+        posted_date = _first_text_from_selectors(root, DATE_SELECTORS)
 
         if not title and job_url:
             title = "Job"
         if not title:
             return None
 
-        return {
+        job: dict = {
             "title": title,
             "company": company or "Unknown",
             "location": location,
             "url": job_url,
             "description": "",
         }
+        if scrape_reference_time_utc is not None:
+            frozen = freeze_posted_timestamp(posted_date, scrape_reference_time_utc)
+            job["posted_date_raw"] = frozen["posted_date_raw"]
+            job["posted_at_utc"] = frozen["posted_at_utc"]
+            job["posted_date"] = frozen["posted_at_utc"]
+        else:
+            job["posted_date"] = posted_date or None
+        return job
     except Exception:
         return None
 

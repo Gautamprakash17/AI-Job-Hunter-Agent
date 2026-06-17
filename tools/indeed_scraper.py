@@ -7,11 +7,13 @@ Scrapes job listings from Indeed using Playwright.
 import logging
 import re
 import time
+from datetime import datetime
 from typing import List, Optional
 
 from playwright.sync_api import Page
 
 from tools.browser_automation import get_browser, get_browser_context, navigate_and_wait
+from utils.job_posted_date import PostedDateFilter, freeze_posted_timestamp, portal_url_date_params
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,11 @@ LOCATION_SELECTORS = [
     ".companyLocation",
     "[class*='companyLocation']",
 ]
+DATE_SELECTORS = [
+    "span.date",
+    "span[data-testid='myJobsStateDate']",
+    "[class*='date']",
+]
 
 
 def _first_text(card, selectors: List[str]) -> str:
@@ -59,6 +66,8 @@ def scrape_indeed_jobs(
     location: Optional[str] = None,
     max_results: int = 25,
     fetch_descriptions: bool = False,
+    posted_date_filter: PostedDateFilter = "any_time",
+    scrape_reference_time_utc: Optional[datetime] = None,
 ) -> List[dict]:
     """
     Scrape job listings from Indeed.com.
@@ -77,6 +86,8 @@ def scrape_indeed_jobs(
     base_url = f"https://www.indeed.com/jobs?q={query}"
     if location:
         base_url += f"&l={location.replace(' ', '+')}"
+    for key, value in portal_url_date_params("indeed", posted_date_filter).items():
+        base_url += f"&{key}={value}"
 
     with get_browser() as browser:
         with get_browser_context(browser) as context:
@@ -108,7 +119,7 @@ def scrape_indeed_jobs(
                     if collected >= max_results:
                         break
                     try:
-                        job_data = _extract_job_from_card(card)
+                        job_data = _extract_job_from_card(card, scrape_reference_time_utc)
                         if job_data and job_data.get("title"):
                             jk = job_data.get("external_id") or job_data.get("url", "")
                             if jk in seen:
@@ -129,12 +140,16 @@ def scrape_indeed_jobs(
     return jobs
 
 
-def _extract_job_from_card(card) -> Optional[dict]:
+def _extract_job_from_card(
+    card,
+    scrape_reference_time_utc: Optional[datetime] = None,
+) -> Optional[dict]:
     try:
         title_el = card.query_selector("h2.jobTitle a, h2 a, a[data-jk]")
         title = _first_text(card, TITLE_SELECTORS)
         company = _first_text(card, COMPANY_SELECTORS)
         location = _first_text(card, LOCATION_SELECTORS)
+        posted_date = _first_text(card, DATE_SELECTORS)
         url = ""
         jk = ""
         if title_el:
@@ -146,7 +161,7 @@ def _extract_job_from_card(card) -> Optional[dict]:
         if not title:
             return None
 
-        return {
+        job: dict = {
             "title": title,
             "company": company or "Unknown",
             "location": location,
@@ -154,6 +169,14 @@ def _extract_job_from_card(card) -> Optional[dict]:
             "description": f"{title} at {company}. {location}",
             "external_id": jk or _extract_indeed_jk(url),
         }
+        if scrape_reference_time_utc is not None:
+            frozen = freeze_posted_timestamp(posted_date, scrape_reference_time_utc)
+            job["posted_date_raw"] = frozen["posted_date_raw"]
+            job["posted_at_utc"] = frozen["posted_at_utc"]
+            job["posted_date"] = frozen["posted_at_utc"]
+        else:
+            job["posted_date"] = posted_date or None
+        return job
     except Exception:
         return None
 

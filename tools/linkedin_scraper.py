@@ -8,12 +8,14 @@ Uses current LinkedIn jobs search page structure (base-card, base-search-card).
 import logging
 import re
 import time
+from datetime import datetime
 from typing import List, Optional
 
 from playwright.sync_api import Page
 
 from config.settings import settings
 from tools.browser_automation import get_browser, get_browser_context, navigate_and_wait
+from utils.job_posted_date import PostedDateFilter, freeze_posted_timestamp, portal_url_date_params
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,13 @@ LOCATION_SELECTORS = [
     "span.job-search-card__location",
     ".job-card-container__metadata-item",
     "[class*='metadata']",
+]
+DATE_SELECTORS = [
+    "time.job-search-card__listdate",
+    "span.job-search-card__listdate",
+    "time",
+    "[class*='listdate']",
+    "[class*='posted']",
 ]
 LINK_SELECTORS = [
     "a.base-card__full-link",
@@ -79,6 +88,8 @@ def scrape_linkedin_jobs(
     experience_years: Optional[float] = None,
     max_results: int = 25,
     fetch_descriptions: bool = True,
+    posted_date_filter: PostedDateFilter = "any_time",
+    scrape_reference_time_utc: Optional[datetime] = None,
 ) -> List[dict]:
     """
     Scrape job listings from LinkedIn based on search criteria.
@@ -102,6 +113,8 @@ def scrape_linkedin_jobs(
         exp_filter = _experience_to_linkedin(experience_years)
         if exp_filter:
             base_url += f"&f_E={exp_filter}"
+    for key, value in portal_url_date_params("linkedin", posted_date_filter).items():
+        base_url += f"&{key}={value}"
 
     with get_browser() as browser:
         with get_browser_context(browser) as context:
@@ -137,7 +150,9 @@ def scrape_linkedin_jobs(
                     if collected >= max_results:
                         break
                     try:
-                        job_data = _extract_job_from_card(page, card, fetch_descriptions)
+                        job_data = _extract_job_from_card(
+                            page, card, fetch_descriptions, scrape_reference_time_utc
+                        )
                         if job_data and job_data.get("title"):
                             url = job_data.get("url", "")
                             if url and url in seen_urls:
@@ -165,12 +180,17 @@ def _extract_job_from_card(
     page: Page,
     card,
     fetch_description: bool = True,
+    scrape_reference_time_utc: Optional[datetime] = None,
 ) -> Optional[dict]:
     """Extract job data from a LinkedIn job card."""
     try:
         title = _first_text(card, TITLE_SELECTORS)
         company = _first_text(card, COMPANY_SELECTORS)
         location = _first_text(card, LOCATION_SELECTORS)
+        posted_date = _first_text(card, DATE_SELECTORS)
+        time_el = _first_element(card, ["time"])
+        if time_el and not posted_date:
+            posted_date = (time_el.get_attribute("datetime") or "").strip() or posted_date
 
         link_el = _first_element(card, LINK_SELECTORS)
         url = link_el.get_attribute("href") if link_el else ""
@@ -194,7 +214,7 @@ def _extract_job_from_card(
             except Exception:
                 pass
 
-        return {
+        job: dict = {
             "title": title,
             "company": company,
             "location": location,
@@ -202,6 +222,14 @@ def _extract_job_from_card(
             "description": description or f"{title} at {company}.",
             "external_id": _extract_linkedin_job_id(url),
         }
+        if scrape_reference_time_utc is not None:
+            frozen = freeze_posted_timestamp(posted_date, scrape_reference_time_utc)
+            job["posted_date_raw"] = frozen["posted_date_raw"]
+            job["posted_at_utc"] = frozen["posted_at_utc"]
+            job["posted_date"] = frozen["posted_at_utc"]
+        else:
+            job["posted_date"] = posted_date or None
+        return job
     except Exception:
         return None
 

@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from config.settings import settings
 from database.db import get_db, init_db
 from database.models import Application, Job
+from utils.job_posted_date import PostedDateFilter
 from workflows.job_agent_graph import run_job_hunter_workflow
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ class JobHunterRequest(BaseModel):
     target_role: str
     location: Optional[str] = None
     experience_years: Optional[float] = None
+    posted_date_filter: PostedDateFilter = "any_time"
 
 
 class JobHunterResponse(BaseModel):
@@ -88,6 +90,7 @@ def run_workflow(request: JobHunterRequest):
             target_role=request.target_role,
             location=request.location,
             experience_years=request.experience_years,
+            posted_date_filter=request.posted_date_filter,
         )
         ranked = [
             {"job": job, "score": float(score)}

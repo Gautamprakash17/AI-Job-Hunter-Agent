@@ -13,6 +13,11 @@ from langgraph.graph import END, StateGraph
 from agents.resume_parser_agent import ResumeParserAgent, parse_resume
 from agents.job_discovery_agent import discover_jobs
 from agents.job_ranking_agent import rank_jobs_with_details
+from utils.job_posted_date import (
+    PostedDateFilter,
+    filter_jobs_by_posted_date_with_metrics,
+    parse_reference_iso,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +33,10 @@ class JobAgentState(TypedDict):
     # Optional discovery: which portals and how many jobs per portal
     portals: Optional[List[str]]
     max_per_portal: Optional[int]
+    posted_date_filter: Optional[PostedDateFilter]
+    workflow_reference_time_utc: Optional[str]
+    scrape_posted_date_filter: Optional[PostedDateFilter]
+    posted_date_metrics: Optional[Dict[str, int]]
 
     # Agent outputs
     resume_profile: Dict[str, Any]
@@ -75,17 +84,35 @@ def _discover_jobs_node(state: JobAgentState) -> JobAgentState:
     exp_years: Optional[float] = state.get("experience_years")
     portals: Optional[List[str]] = state.get("portals")
     max_per_portal: int = state.get("max_per_portal") or 15
+    posted_date_filter: PostedDateFilter = state.get("posted_date_filter") or "any_time"
 
     try:
-        jobs = discover_jobs(
+        discovery = discover_jobs(
             target_role=target or "Software Engineer",
             location=state.get("location"),
             experience_years=exp_years,
             portals=portals,
             max_per_portal=max_per_portal,
-            fetch_descriptions=False,  # Faster; ranking uses title+company+short desc
+            fetch_descriptions=False,
+            posted_date_filter=posted_date_filter,
         )
-        return {**state, "jobs_found": jobs}
+        jobs = discovery.jobs
+        ref = parse_reference_iso(discovery.workflow_reference_time_utc)
+        if posted_date_filter != "any_time" and ref is not None:
+            jobs, filter_metrics = filter_jobs_by_posted_date_with_metrics(
+                jobs, posted_date_filter, reference_now=ref
+            )
+            metrics = filter_metrics.to_dict()
+        else:
+            metrics = discovery.scrape_metrics.to_dict()
+
+        return {
+            **state,
+            "jobs_found": jobs,
+            "workflow_reference_time_utc": discovery.workflow_reference_time_utc,
+            "scrape_posted_date_filter": discovery.scrape_posted_date_filter,
+            "posted_date_metrics": metrics,
+        }
     except Exception as exc:
         logger.exception("Job discovery failed: %s", exc)
         return {**state, "error": str(exc), "jobs_found": []}
@@ -188,9 +215,10 @@ def run_job_hunter_workflow(
     experience_years: Optional[float] = None,
     portals: Optional[List[str]] = None,
     max_per_portal: Optional[int] = None,
+    posted_date_filter: Optional[PostedDateFilter] = None,
 ) -> Dict[str, Any]:
     """
-    Run discovery + ranking workflow. Optional: location, experience_years, portals, max_per_portal.
+    Run discovery + ranking workflow. Optional: location, experience_years, portals, max_per_portal, posted_date_filter.
     """
     graph = get_job_agent_graph()
     initial_state: JobAgentState = {
@@ -200,6 +228,10 @@ def run_job_hunter_workflow(
         "experience_years": experience_years,
         "portals": portals,
         "max_per_portal": max_per_portal,
+        "posted_date_filter": posted_date_filter or "any_time",
+        "workflow_reference_time_utc": None,
+        "scrape_posted_date_filter": None,
+        "posted_date_metrics": None,
         "resume_profile": {},
         "jobs_found": [],
         "ranked_jobs": [],
