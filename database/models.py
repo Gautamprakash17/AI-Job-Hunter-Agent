@@ -24,10 +24,18 @@ class Resume(Base):
     parsed_content = Column(Text, nullable=True)
     target_role = Column(String(255), nullable=True)
     experience_years = Column(Float, nullable=True)
+    
+    # User preferences for custom search
+    user_phone = Column(String(20), nullable=True)  # WhatsApp number
+    preferred_location = Column(String(255), nullable=True)
+    min_match_score = Column(Float, default=0.7)
+    notification_enabled = Column(Integer, default=1)  # 1=enabled, 0=disabled
+    
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     applications = relationship("Application", back_populates="resume")
+    search_history = relationship("SearchHistory", back_populates="resume")
 
 
 class Job(Base):
@@ -68,3 +76,23 @@ class Application(Base):
 
     resume = relationship("Resume", back_populates="applications")
     job = relationship("Job", back_populates="applications")
+
+
+class SearchHistory(Base):
+    """Tracks custom search execution history and results."""
+
+    __tablename__ = "search_history"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    resume_id = Column(Integer, ForeignKey("resumes.id"), nullable=False)
+    search_type = Column(String(50), default="custom")  # custom, scheduled, manual
+    jobs_found = Column(Integer, default=0)
+    jobs_notified = Column(Integer, default=0)
+    location = Column(String(255), nullable=True)
+    min_score = Column(Float, nullable=True)
+    portals_used = Column(JSON, nullable=True)  # List of portal names
+    notification_sent = Column(Integer, default=0)  # 1=sent, 0=failed
+    error_message = Column(Text, nullable=True)
+    executed_at = Column(DateTime, default=datetime.utcnow)
+
+    resume = relationship("Resume", back_populates="search_history")

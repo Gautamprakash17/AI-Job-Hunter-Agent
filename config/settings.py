@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     # Dashboard
     dashboard_port: int = 8501
 
+    # WhatsApp Notifications (Twilio)
+    twilio_account_sid: Optional[str] = None
+    twilio_auth_token: Optional[str] = None
+    twilio_whatsapp_number: Optional[str] = None  # Format: +14155238886
+
     @property
     def db_path(self) -> Path:
         """Resolve database path and ensure parent directory exists."""
